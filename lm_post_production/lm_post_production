@@ -1,0 +1,1477 @@
+#!/bin/bash
+
+# This script converts all your "article.txt" files to html-format.
+# for this, you have to put all your articles in one subfolder and start this
+# script from there. Then it converts all listings
+
+# Filename
+article=article.txt
+error_log=error.log
+article_html=article.html
+satzfertig=sf
+iconv=/usr/bin/iconv
+skriptuser=$(whoami)
+convert=/usr/bin/convert
+
+# Path Variables
+working_dir=$(pwd)
+bin_dir="/opt/lnm/bin"
+exportpath=${working_dir}"/../../1_export"
+target_folder=${working_dir}"/../../2_checked"
+backup="../../backup"
+tempfolder="temp"
+editor=/usr/bin/gedit
+browser=/usr/bin/firefox
+leserbriefe_titlepic="@BA:images/Visual_Leserbriefe.png"
+
+# Magazine Issue
+issue_year=$(pwd | grep -o "[2][0][0-9][0-9]")
+issue_month=$(pwd | grep -o "[2][0][0-9][0-9]..." | tail -c 3)
+
+
+## LOCK: SET A LOCK ##
+function lock
+{
+
+# Check, if someone is using a Lock
+if ! mkdir /tmp/lm_post_production.lock; then
+    echo -e "Offenbar verwendet gerade jemand anders das Programm. Falls nicht, liegt die Lock-Datei als Ordner in /tmp/\n" >&2
+    exit 1
+fi
+
+# Remove *.lock dir at the end
+trap 'rm -rf /tmp/lm_post_production.lock' EXIT
+}
+
+## CHECK PERMISSIONS FOR ARTICLE.TXT
+function checkperms
+{
+wrong_fileperms=$(stat ${article} | grep '0444' 2>&1)
+	if [[ "${wrong_fileperms}" ]]; then
+		chmod 754 ${article}
+	fi
+}
+
+## BACKUP ARTICLES BEFORE CHANGING ANYTHING ##
+function backup
+{
+
+
+echo -e "Lege Backup des Artikels an..."
+
+if [ -d ${backup}/${folder} ]; then
+	echo -e "Backup für "${folder} "existiert bereits."
+else
+	echo -e "Erzeuge ein Backup von "${folder}"..."
+	mkdir -p ${backup}/${folder}
+	cp article.txt ${backup}/${folder}/
+	cp -fR images ${backup}/${folder}/
+fi
+
+}
+
+
+## CONVERT ARTICLE.TXT TO UTF-8 OTHERWISE SCRIPT BREAKS ##
+function convert_to_utf8 {
+
+if [ -e article.txt ]; then
+
+    # Workaround, might be removed, if 'wait' and 'sync' work
+    cp ${article} article.txt.copy &&
+    mv article.txt.copy ${article} &&
+    ${iconv} -f ISO-8859-15 -t UTF-8 ${article} -o article.txt.tmp
+    wait
+    mv article.txt.tmp article.txt
+    wait
+else
+	echo -e "Die Datei 'article.txt' scheint nicht zu existieren."
+	exit 0
+fi
+}
+
+
+## CONVERT ARTICLE.TXT BACK TO ISO-8859-15 ##
+function convert_to_iso8859_15 {
+
+if [ -e article.txt ]; then
+    chmod 755 ${article} &&
+    wait
+    ${iconv} -f UTF-8 -t ISO-8859-15 ${article} -o article.txt.tmp
+    wait
+    mv article.txt.tmp article.txt
+    wait
+else
+    echo -e "Die Datei 'article.txt' scheint nicht zu existieren."
+	exit 0
+fi
+}
+
+
+##  Module: DISPLAY HELPFILE FOR THE PROGRAM ##
+function usage {
+    bold=`tput bold`
+    normal=`tput sgr0`
+
+    echo -e "${bold}SYNOPSIS${normal}"
+    echo -e "\tlm_post_production <Option> [<Folder1>] [<Folder2>]\n"
+
+    echo -e "${bold}OPTIONEN ALLE DATEIEN${normal}
+    \t-h | --help\t\tAusführliche  Hilfedatei
+    \t-c | --check\t\tPrüfen, ob alle 'article.txt' korrekt aus Indesign exportiert wurden
+    \t-r | --repair\t\tHalbautomatische Reparatur aller 'article.txt'-Dateien
+    \t-m | --make_listings\tListings aller 'article.txt'-Dateien im Ordner aufbereiten
+    \t-u | --upload\t\tXML-Dateien für den Upload vorbereiten\n"
+
+	echo -e "${bold}OPTIONEN FÜR EINZELNE DATEIEN${normal}
+    \t-rs | --repair_some_articles\t\tEine Auswahl an 'article.txt'-Dateien reparieren
+    \t-ms | --make_some_listings\t\tListings einer Auswahl von Artikeln aufbereiten
+    \t-us | --upload_some_articles\t\tEine Auswahl von XML-Dateien für den Upload vorbereiten\n"
+
+    echo -e "${bold}BEISPIELE${normal}"
+    echo -e "\tAlle Dateien reparieren: 	\t\tlm_post_production -r"
+    echo -e "\tAusgewählte Dateien reparieren: 	\tlm_post_production -rs 003-003-editorial 006-008-news"
+    echo -e "\tEinige Dateien hochladen: 	\t\tlm_post_production -us [OHNE OPTIONEN]\n"
+
+    echo -e "${bold}KURZBESCHREIBUNG${normal}"
+    echo -e "\tLege einen eigenen Unterordner im Verzeichnis '1_export' an. Verschiebe die
+    \tArtikel-Ordner dorthin und wechsele auf der Kommandozeile in diesen Ordner.
+    \tRufe das Skript mit seinen Optionen auf, um möglichst saubere '.txt'-Dateien zu erzeugen
+    \tund diese dann in HTML- und XML-Dateien für den Artikel-Upload zu verwandeln."
+
+}
+
+##  Module: DISPLAY HELPFILE FOR THE PROGRAM ##
+function get_help {
+
+    bold=`tput bold`
+    normal=`tput sgr0`
+
+    echo -e "${bold}NAME${normal}"
+    echo -e "\tlm_post_production\n"
+
+    echo -e "${bold}SYNOPSIS${normal}"
+    echo -e "\tlm_post_production --help | --check | --repair | --make_listings | --upload\n"
+    echo -e "\tlm_post_production --repair_some_articles | --make_some_listings | --upload_some_articles\n"
+
+    echo -e "${bold}KURZBESCHREIBUNG${normal}"
+    echo -e "\tDer Redakteur legt einen eigenen Unterordner im Verzeichnis '1_export' an. Er verschiebt seine
+    \tArtikel-Ordner dorthin und wechselt auf der Kommandozeile in diesen Ordner.
+    \tEr ruft dort dann das Skript 'lm_post_production' mit seinen Optionen auf (das ist im Pfad und liegt in /opt/lnm/bin).
+    \tMit dem Schalter '-r' erzeugt er möglichst saubere '.txt'-Dateien, die er dann mit '-m' und '-u'
+    \tin XML-Dateien für den Artikel-Upload verwandelt.\n"
+
+    echo -e "\tWill der Redakteur einzelne oder mehrere Artikel nachträglich durch den Prozess schleusen
+    \tgreift er zu '-rs' und '-ms' und ergänzt ein oder mehrere gewünschten Ordner als Argumente.
+    \tDiese Ordner landen dann in '2_checked/temp'. Ein (-us) generiert XML-Dateien und repariert
+    \tdie Details der ausgewählten Artikel in '2_checked/temp'.\n"
+
+    echo -e "${bold}OPTIONS${normal}"
+    echo -e "\t${bold}-h${normal} / --help\n"
+
+    echo -e "\t\tZeigt diese Hilfedatei an.\n"
+
+    echo -e "\t${bold}-c${normal} / --check\n"
+
+    echo -e "\t\tFür alle Artikel in '1_export' checkt ${bold}'-c'${normal}, ob der Indesign-Export
+    \t\tfunktioniert hat und eine Datei namens 'article.txt' in jedem Folder liegt. Der User
+    \t\tmuss diese Option nur einmal anwenden.\n"
+
+    echo -e "\t${bold}-r${normal} / --repair\n"
+
+    echo -e "\t\tDer Reparatur-Schalter ${bold}'-r'${normal} bereinigt die aus dem Indesign exportierten
+    \t\t'article.txt'-Dateien und konvertiert sie in '.html'-Dateien, die Firefox dann anzeigt.
+    \t\tDas betrifft alle Artikel im anfangs angelegten Unterordner von '1_export'.
+    \t\tDie dabei von 'sf' genannten Fehler landen in einem 'error.log'.
+    \t\tEntdeckt der Redakteur in der HTML-Ansicht noch Fehler, verbessert er die TXT-Datei.\n"
+
+    echo -e "\t${bold}-m${normal} / --make_listings\n"
+
+    echo -e "\t\tMachen alle HTML-Dateien einen guten Eindruck, extrahiert der Schalter ${bold}'-m'${normal}
+    \t\tdie Listings aus den Artikeln und verschiebt sie auf den FTP-Server. Dann verschiebt das Skript
+    \t\tden kompletten Ordner nach '2_checked'.\n"
+
+    echo -e "\t${bold}-u${normal} / --upload\n"
+
+    echo -e "\t\tSchließlich generiert die Option ${bold}'-u'${normal} XML-Dateien für den Upload.
+    \t\tFehler in den XML-Dateien, die das Skript nicht automatisch behebt, schreibt es auf die Konsole.
+    \t\tDer Redakteur muss notfalls nochmal Änderungen an der 'article.txt' des fehlerhaften Artikels vornehmen.
+    \t\tTut er das nicht, klappt der Upload auf die Webseite eventuell nicht. Über die Optionen '-rs', '-ms' und '-us'
+    \t\tschleust er einzelne Artikel durch den Prozess.\n"
+
+    echo -e "\t${bold}-rs <Ordner1> <Ordner2>${normal} / --repair_some_articles <Ordner1> <Ordner2>\n"
+    echo -e "\t\tRepariert einen oder mehrere Artikel (siehe '-r')\n"
+
+    echo -e "\t${bold}-ms <Ordner1> <Ordner2>${normal} / --make_some_listings <Ordner1> <Ordner2>\n"
+
+    echo -e "\t\tWandelt die Listings eines oder mehrerer Artikel um und schiebt die zugehörigen.
+    \t\tArtikel nach '2_checked' (siehe '-m')\n"
+
+    echo -e "\t${bold}-us (Ohne Optionen)${normal} / --upload_some_files (Ohne Optionen)\n"
+    echo -e "\t\tKonvertiert eine oder mehrere der bereinigten 'article.txt'-Dateien in XML-Dateien
+    \t\tund macht sie bereit für den Upload (siehe '-u', braucht keine Optionen).\n"
+
+    echo -e "${bold}AUTHOR${normal}"
+    echo -e "\tWritten by Kristian Kißling, 2015 - 2016\n"
+
+    echo -e "${bold}REPORTING BUGS${normal}"
+    echo -e "\tBug Reports to kkissling@linux-magazin.de\n"
+
+    echo -e "${bold}COPYRIGHT${normal}"
+    echo -e "\tLicense: GNU Public License v2."
+    echo -e "\tThis is free software: you are free  to  change  and  redistribute  it.
+    \tThere is NO WARRANTY, to the extent permitted by law."
+    exit 0
+}
+
+## Module: WARNS WHERE MANUAL CHANGES ARE NECESSARY ##
+function mod_warnings {
+
+# Warnings could be removed with future solutions
+# warns, if unwanted elements are found inside a box
+warning_a1=$(grep -o '^@[A-Z]*:' ${article} | grep -B1 '@KE' | grep -n '@L:')
+warning_a2=$(grep -o '^@[A-Z]*:' ${article} | grep -B1 '@KE' | grep -n '@BI:')
+warning_a3=$(grep -o '^@[A-Z]*:' ${article} | grep -B1 '@KE' | grep -n '@B:')
+warning_a4=$(grep -o '^@[A-Z]*:' ${article} | grep -B1 '@KE' | grep -n '@TT:')
+
+    if [ "${warning_a1}" ] || [ "${warning_a2}" ] || [ "${warning_a3}" ] || [ "${warning_a4}" ]; then
+        rot=$(tput setaf 1)
+        reset=$(tput sgr0)
+        echo -e ${rot}"Es scheinen Bilder und Tabellen im Kasten in " ${folder} " zu stecken. Bitte manuell korrigieren." ${reset}
+    fi
+
+# Find orpaned Copyright notices and warn
+cpy=$(grep -e '@#:Unhandled group' ${article})
+
+	if [ "${cpy}" ]; then
+		rot=$(tput setaf 1)
+		reset=$(tput sgr0)
+		echo -e ${rot}"Warnung: Copyright-Hinweise könnten bei Bildern in " ${folder}" fehlen."${reset}
+	fi
+
+# warns, that pictures and news items are probably paired wrong
+news=$(grep -e '@SW: *News' ${article})
+zut=$(grep -e '@SW: *Zahlen & Trends' ${article})
+
+	if [ "${news}" ] || [ "${zut}" ] ; then
+		rot=$(tput setaf 1)
+		reset=$(tput sgr0)
+		echo -e ${rot}"Bitte prüfen, ob Meldungen und Bilder zueinander passen in " ${folder}" und manuell korrigieren."${reset}
+	fi
+
+
+# warns of wrong picture order or missing pics
+pic_order=$(grep -o "^@B: *Abbildung [0-9]*" ${article} | cut -d ":" -f2)
+
+if [ "${pic_order}" ]; then
+    pic_counts=()
+    pic_counts+=$(grep -c '^@B: *Abbildung [0-9]*' ${article})
+
+    for i in $(seq 1 ${pic_counts[@]}); do
+        assumed_order="Abbildung "${i}
+        actual_order=$(grep -o "^@B: *Abbildung [0-9]*" ${article} | cut -d ":" -f2 | sed -n "${i}p")
+        if [ "${assumed_order}" == "${actual_order}" ]; then
+            continue
+        else
+            rot=$(tput setaf 1)
+            reset=$(tput sgr0)
+            echo -e ${rot}"Bildreihenfolge ist verkehrt oder Bilder fehlen in" ${folder}"."${reset}
+            break
+        fi
+    done
+fi
+
+# warns of wrong listing order or missing listings
+listing_order=$(grep -o "^@KT: *Listing [0-9]*" ${article} | cut -d ":" -f2)
+
+if [ "${listing_order}" ]; then
+    listing_counts=()
+    listing_counts+=$(grep -c '^@KT: *Listing [0-9]*' ${article})
+
+    for i in $(seq 1 ${listing_counts[@]}); do
+        assumed_listing_order="Listing "${i}
+        actual_listing_order=$(grep -o "^@KT: *Listing [0-9]*" ${article} | cut -d ":" -f2 | sed -n "${i}p")
+        if [ "${assumed_listing_order}" == "${actual_listing_order}" ]; then
+            continue
+        else
+            rot=$(tput setaf 1)
+            reset=$(tput sgr0)
+            echo -e ${rot}"Listing-Reihenfolge stimmt nicht in" ${folder}" oder es fehlen Listings."${reset}
+            break
+        fi
+    done
+fi
+
+# warns if '&' signs show up in article intro
+and_in_intro=$(grep "@V:" ${article} | grep "&")
+
+if [ "${and_in_intro}" ]; then
+    rot=$(tput setaf 1)
+    reset=$(tput sgr0)
+    echo -e ${rot}"Bitte das '&'-Zeichen im Vorspann des Artikels entfernen in" ${folder}"."${reset}
+fi
+}
+
+## Module: ADAPT TO NEW INTRODUCED KALEIDOSKOP FORMAT
+function mod_kaleidoskop {
+
+kaleidoskop=$(grep -e '@SW: *Kaleidoskop' ${article})
+
+if [ "${kaleidoskop}" ] ; then
+	# Uncomment 'Linux-Magazin:' questions and make it all bold with <B>
+	sed -i 's/^@#: *<I> *Linux-Magazin: *<I>\( .*$\)/@L:<B>Linux-Magazin:\1<B>/' ${article}
+	
+	# Only make <B>Linux-Magazin:<B> bold (not in use)	
+	# sed -i 's/^@#: *<I> *Linux-Magazin: *<I>/@L:<B>Linux-Magazin:<B>/' ${article}
+
+	# Replace <I> with <B> in answers
+	sed -i 's/\@L:<I>\( *.*\)<I>/\@L:<B>\1<B>/' ${article}
+fi
+}
+
+
+##  Module: REMOVE ALL COMMENTS EXCEPT THE ONE WITH ID ##
+function mod_repair_comments {
+
+# Deletes every comment except that @#:ID:...
+# Shows a message if no ID at all is found
+# '/Delete this/ {/Apart from that/! d}'
+occurence=$(grep -c '^@#' ${article})
+occurence_id=$(grep -c '^@#: *ID: *[0-9]' ${article})
+
+    if [ "${occurence}" -gt "1" ]; then
+        sed -i '/^@#.*$/ {/^@#:ID.*$/! d}' ${article}
+    fi
+
+    if [ "${occurence_id}" -lt "1" ]; then
+		rot=$(tput setaf 1)
+        reset=$(tput sgr0)
+        echo -e ${rot}"Die @#:ID fehlt offenbar in " ${folder} ", bitte korrigieren." ${reset}
+    fi
+}
+
+
+## Module: REMOVE DOUBLE PICS IN INSEC NEWS ##
+function mod_insecurity_pic {
+
+# remove standard-pic from Insec if there are two pics or more
+#insec=$(grep -e '@SW: *Insecurity' ${article})
+vis=$(grep -n '@BA:.*Visual_insecurity' ${article} | cut -d ":" -f 1)
+titlepic=$(grep -e '@BI:.*123[rR][fF].*' ${article})
+
+    if [[ "${vis}" ]] && [[ "${titlepic}" ]]; then
+	sed -i ''"${vis}"'c'"${titlepic}" ${article}
+	artefakt=$(grep -n '@BI:.*123[rR][fF].*' ${article} | cut -d ":" -f 1 | tail -n -1)
+	sed -i ''"${artefakt}"'d' ${article}
+	# change @BI: to @BA:
+	sed -i '0,/@BI:/s//@BA:/' ${article}
+    fi
+}
+
+## Module: DELETE NEEDLESS ADS AND COVER PICS ##
+function mod_remove_ads {
+
+ads=$(grep -e '@B.: *.*_ANZ_' ${article})
+
+	if [ "${ads}" ] ; then
+		ads_cp_right=$(grep -n -e '@BA:' ${article} | cut -d ":" -f 1)
+		if [ "${ads_cp_right}" ]; then
+			ba=$((${ads_cp_right}+1))
+			sed -i ''"${ba}"'d' ${article}
+		fi
+        sed -i 's/@B.: *.*_ANZ_.*$//g' ${article}
+	fi
+}
+
+
+## Module: FIND AND REMOVE BROKEN BOXES I ##
+function mod_find_broken_boxes {
+
+	endbox=$(grep -n -e "^@KE" ${article} | cut -d ":" -f1)
+	for k in ${endbox}; do
+		if [ "${k}" -gt "${j}" ]; then
+			echo -e "\n8<----------"
+            sed -e "${j}","${k}"'!d' ${article} | tr -s "[:space:]" " " | tr '@' '\n'
+            echo -e "\n---------->8\n"
+            read -p "Soll das Skript diesen Kasten löschen? [j/n]" delete
+			case ${delete} in
+                    j | y)
+                        sed -i "${j}","${k}"'d' ${article}
+                        counter=$((${counter} + 1))
+                        echo "Kasten gelöscht."
+
+                        if [[ ${counter} -le ${occurences} ]]; then
+							mod_remove_boxes
+						else
+							break 2
+						fi
+                        ;;
+                    n)
+						counter=$((${counter} + 1))
+                        break
+                        ;;
+			esac
+			break
+		fi
+	done
+}
+
+
+## Module: FIND AND REMOVE BROKEN BOXES II ##
+function mod_remove_boxes {
+
+	startbox=$(grep -n -e "^@KT: *Inhalt\|^@KT: *D[eE][lL][uU][gG]\|^@KT: *H[Ee][fF][tT]-DVD" ${article} | cut -d ":" -f1)
+	occurences=$(grep -c -e "^@KT: *Inhalt\|^@KT: *D[eE][lL][uU][gG]\|^@KT: *H[Ee][fF][tT]-DVD" ${article})
+
+	if [[ "${startbox}" ]]; then
+			for j in ${startbox}; do
+				mod_find_broken_boxes
+			done
+	fi
+}
+
+
+## Module: REMOVE DUPLICATE TITLE PICTURES ##
+function mod_remove_duplicate {
+
+#   removes duplicate title pics in "sw_einf"
+keyword=$(grep -e '@SW:*Einf.hrung' ${article})
+category=$(grep -e '@R:*Software' ${article})
+dupimage=$(grep -c 'DVDgold' ${article})
+secimage=$(grep -e 'DVDgold' ${article} | tail -1)
+
+    if { [ ${keyword} ] && [ ${category} ] ;} && [ ${dupimage} == 2 ]; then
+
+        # use "|" instead of "/" als delimiter because of path in secimage
+        sed -i "s|$secimage||g" ${article}
+    fi
+}
+
+
+## Module: CHECK KURZNACHRICHTEN TITLE IN NEWS ##
+function mod_repair_news_box {
+
+news=$(grep -e '@SW: *News' ${article})
+boxtitle=$(grep -e '^@KT: *Kurznachrichten*$' ${article})
+
+if [ "${news}" ] ; then
+    if [ -z "${boxtitle}" ]; then
+        startbox=$(grep -n '^@KL: *.*$' ${article} | head -n 1 | cut -d ":" -f1)
+        entrypoint=$((${startbox}-1))
+        # i in i@KT stands for "insert at line xyz"
+        sed -i ''"${entrypoint}"'i@KT: Kurznachrichten' ${article}
+    fi
+fi
+}
+
+
+##  Module: PASTE TEXT IN DACHZEILE IN ZUT ##
+function mod_repair_news_headline {
+
+zut=$(grep -e '@SW: *Zahlen & Trends' ${article})
+news=$(grep -e '@SW: *News' ${article})
+
+	if [ "${zut}" ]; then
+		sed -i 's/@D: *.*$/@D:Zahlen \& Trends/g' ${article}
+	fi
+
+	if [ "${news}" ] ; then
+		sed -i 's/@D: *.*$/@D:News/g' ${article}
+	fi
+}
+
+
+## Module: IDENTIFY AND CHANGE HEADLINES BELONGING TO A GROUP (@ZTA)
+function mod_sub_headlines {
+
+headline=$(grep -e '@ZT: ' ${article})
+
+    if [ "${headline}" ]; then
+        sed -i 's/\@ZT: /@ZTA:/g' ${article}
+    fi
+}
+
+
+## Module: REMOVE DOUBLE LINES WITH EMPTY TABS ##
+function mod_remove_tablines {
+
+# Grep only those lines that consist only in Tabs
+# That prevents deleting lines with content
+tabs=$(grep -n '^        [^[:alnum:]]*$' ${article} | cut -d ":" -f1)
+    for i in ${tabs}; do
+        Zeile erfassen
+        checke ob Zeile drüber Tabzeile
+        checke ob Zeile drunter Tabzeile
+        wenn beides erfüllt, löschen
+        wenn nicht beides erfüllt, nächste Zeile
+    done
+}
+
+
+## Module: CHANGE PICTURES IN EDITORIAL ##
+function mod_prepare_edi {
+
+edi=$(grep -e '@R: *Editorial' ${article})
+
+    if [ "${edi}" ]; then
+        # remove empty tags
+        sed -i '/@V:.*$/d' ${article}
+        sed -i '/@A:.*$/d' ${article}
+
+        # switch jans picture with his signature
+        upper_img=$(grep -n "@BA\: *.*unterschrift.*$" ${article} | cut -d ":" -f 1)
+        lower_img=$(grep -n "@B\: *.*Chefredakteur.*$" ${article} | cut -d ":" -f 1)
+        lower_plus_one=$((${lower_img}+1))
+        upper_plus_one=$((${upper_img}+1))
+
+        if [[ "${upper_img}" ]] && [ "${lower_img}" -gt "${upper_img}" ]; then
+            upper=$(grep "@BA: *.*" ${article})
+            lower=$(grep "@BI: *.*" ${article})
+            lower_bu=$(grep "@B: *.*" ${article})
+
+            sed -i ''"${upper_img}"'c'"${lower}" ${article}
+            sed -i ''"${lower_img}"'c'"${upper}" ${article}
+            sed -i ''"${upper_plus_one}"'c'"${lower_bu}" ${article}
+            artefakt=$(grep -n "@BI" ${article} | cut -d ":" -f 1 | tail -n -1)
+            sed -i ''"${artefakt}"'d' ${article}
+
+            sed -i 's|@BA|@BI|' ${article}
+            sed -i '/unterschrift/!s/@BI/@BA/g' ${article}
+        fi
+    fi
+}
+
+
+## Module: REPLACE BOXES IN BOOK ARTICLE ##
+function mod_replace_bookbox {
+books=$(grep -e '@SW:B.*cher' ${article})
+infobox=$(grep -c '^@IT:.*Info' ${article})
+new_infobox=$(grep -c '^@B:.*Info' ${article})
+
+    if [ "${books}" ] && [ "${infobox}" == 2 ]; then
+
+	# get resized titlepic	
+	cd images
+	cp /opt/lnm/bin/Visual_Buecher_2018.png .
+    	cd ..
+	
+	sed -i '0,/@BI:/s//@BA:/' ${article}
+        sed -i '0,/IT\:.*fo$/s//KT:Info 1/; /IT\:.*fo$/s//KT:Info 2/' ${article}
+        sed -i 's/@IL:/@KL:/g' ${article}
+    
+    elif [ "${books}" ] && [ "${new_infobox}" == 2 ]; then
+
+	# get resized titlepic
+	cd images
+	cp /opt/lnm/bin/Visual_Buecher_2018.png .
+    	cd ..
+
+	sed -i '0,/@BI:/s//@BA:/' ${article}
+        sed -i '0,/B\:.*fo$/s//KT:Info 1/; /B\:.*fo$/s//KT:Info 2/' ${article}
+        sed -i 's/@B:/@KL:/g' ${article}
+	sed -i '/@KT:/G' ${article}
+
+	# swap positions of Box Titles and Pictures
+	# Picture 1
+	# find line number of empty line after KT:Info1
+	emptyln_one=$(grep -n "@KT:Info 1" ${article} | cut -d ":" -f 1)
+	infopic_one=$(grep -m 1 "@BI: *.*" ${article})
+	emptyln_one_plus=$((${emptyln_one}+1))
+	emptyln_one_minus=$((${emptyln_one}-2))
+	sed -i ''"${emptyln_one_plus}"'c'"${infopic_one}" ${article}
+	sed -i ''"${emptyln_one_minus}"'d' ${article}
+
+	# swap positions of Box Titles and Pictures
+	# Picture 2
+	# find line number of empty line after KT:Info2
+	emptyln_two=$(grep -n "@KT:Info 2" ${article} | cut -d ":" -f 1)
+	infopic_two=$(grep -m 2 "@BI: *.*" ${article} | tail -n -1)
+	emptyln_two_plus=$((${emptyln_two}+1))
+	emptyln_two_minus=$((${emptyln_two}-2))
+	sed -i ''"${emptyln_two_plus}"'c'"${infopic_two}" ${article}
+	sed -i ''"${emptyln_two_minus}"'d' ${article}
+	
+    fi
+}
+
+
+## Module: REMOVE <C>-TAGS IN SUB-HEADLINES AND HEADER ##
+function mod_remove_ctag {
+
+c_in_header=$(grep -e "@V:.*<C>.*$" ${article})
+c_in_headlines=$(grep -e "@ZT:.*<C>.*$" ${article})
+c_in_group_headlines=$(grep -e "@ZTA:.*<C>.*$" ${article})
+
+	if [ "${c_in_header}" ]; then
+	    # Remove <C>-Tags in Vorspann...
+        header_wo_c=$(echo ${c_in_header} | sed 's|<C>|"|g')
+        sed -i 's/'"${c_in_header}"'/'"${header_wo_c}"'/g' ${article}
+	fi
+
+	if [ "${c_in_headlines}" ]; then
+	    # Remove <C>-Tags in Headlines...
+        headlines_wo_c=$(echo ${c_in_headlines} | sed 's|<C>|"|g')
+        sed -i 's/'"${c_in_headlines}"'/'"${headlines_wo_c}"'/g' ${article}
+    fi
+
+    if [ "${c_in_group_headlines}" ]; then
+	    # Remove <C>-Tags in Grouped Headlines (Bitparade)...
+        group_headlines_wo_c=$(echo ${c_in_group_headlines} | sed 's|<C>|"|g')
+        sed -i 's/'"${c_in_group_headlines}"'/'"${group_headlines_wo_c}"'/g' ${article}
+    fi
+
+}
+
+
+## Module: FILL OUT HEADER LINE IN LETTERS TO THE EDITOR ##
+function mod_prepare_ed_letter {
+
+stdvorspann="Haben Sie Anregungen, Statements oder Kommentare? Dann schreiben Sie an [redaktion@linux-magazin.de]. Die Redaktion behält es sich vor, die Zuschriften und Leserbriefe zu kürzen. Sie veröffentlicht alle Beiträge mit Namen, sofern der Autor nicht ausdrücklich Anonymität wünscht."
+
+leserbriefe=$(grep -e '@SW:*Leserbriefe' ${article})
+dachzeile=$(grep -e '@D: *$' ${article})
+vorspann=$(grep -e '@V: *$' ${article})
+
+if [ "${leserbriefe}" ] && [ "${dachzeile}" ] && [ "${vorspann}" ]; then
+
+    cd images
+    cp /opt/lnm/bin/Visual_Leserbriefe.png .
+    cd ..
+
+    sed -i 's/@D:/@D:Auf den Punkt gebracht/g' ${article}
+    sed -i 's/@T:/@T:Leserbriefe/g' ${article}
+    # insert blank line after titel
+    sed -i '/@T:/G' ${article}
+    # get line number @T:
+    title_lnnr=$(grep -n "@T:" ${article} | cut -d ":" -f 1)
+    insert_ttl_pic=$((${title_lnnr}+1))
+    # put titel pic in line after title
+    sed -i ''"${insert_ttl_pic}"'i'"${leserbriefe_titlepic}"'' ${article}
+    sed -i 's/@V:/@V:'"${stdvorspann}"'/g' ${article}
+
+fi
+}
+
+
+## Module: CHANGE PIC ORDER IN NEWS AND ZUT ##
+function mod_prepare_pics_news_zut {
+
+# Needed for XML Upload
+
+news=$(grep -e '@SW: *News' ${article})
+zut=$(grep -e '@SW: *Zahlen & Trends' ${article})
+
+if [ "${news}" ] || [ "${zut}" ] ; then
+
+    # First remove empty @V: and @A:-Tags
+    sed -i '/@V:.*$/d' ${article}
+    sed -i '/@A:.*$/d' ${article}
+
+    # Now switch lines for pictures
+    countr=$(grep -c '^@BC:' ${article})
+    for i in $(seq 1 ${countr}); do
+        # look for first matches, if several matches, only show last one
+        text=$(grep -o '@BC:.*$' -m ${i} ${article} | tail -n 1)
+        # look for first matches with line numbers, if several, cut and only show last line number
+        line=$(grep -n '@BC:' -m ${i} ${article} | cut -d ":" -f 1 | tail -n 1)
+        # show number of line before
+        line_before=$(($line-1))
+        # remember content of line before
+        text_before=$(grep -B 1 '@BC:.*$' -m ${i} ${article} | tail -n 2 | grep -o '@B:.*$')
+        if [ "${text_before}" ]; then
+            # now replace lines that start with @BC: with those that start with @B:
+            sed -i ''"${line_before}"'c'"${text}"'' ${article}
+            sed -i ''"${line}"'c'"${text_before}"'' ${article}
+        else
+            continue
+        fi
+    done
+fi
+}
+
+
+## Module: PREPARE TOOLTIPPS ##
+function mod_prepare_tooltipps {
+
+tooltipps=$(grep -e '@T: *Tooltipps' ${article})
+
+if [ "${tooltipps}" ]; then
+
+    cd images
+    cp /opt/lnm/bin/Visual_Tooltipps_2018.png .
+    cd ..
+
+    trailer=$(grep -e '@V: *$' ${article})
+    author=$(grep -e '@A: *$' ${article})
+    # DEPRECATED after
+    # https://github.com/SlurmMcKenzie/lm_post_production/commit/9a6dc7ceeff1eb55e69afc4eec8d9ac52025a55b
+    # find out line number of alone standing pic
+    # single_pic=$(grep -n -A2 '@BI' ${article} | grep '@KT' | tail -n1 | cut -d "-" -f1)
+    
+    # Make first picture a titel picture by replacing @BI with @BA
+    sed -i '0,/@BI:/s//@BA:/' ${article}
+
+    if [ "${trailer}" ]; then
+        for i in $(grep -n '^@KT: *.*$' ${article} | cut -d ":" -f 1); do
+            # Show text following @KT:
+            headlines=$(sed ''"${i}"'!d' ${article} | cut -d ":" -f 2)
+            # Keep @V-line (&) but $headline followed by a comma
+            sed -i 's/\@V: *.*$/&'"${headlines}"', /g' ${article}
+        done
+            # Keep pattern part in parenthesis, remove last comma, add Text after @V
+            sed -i 's/\@V:\( *.*\), $/\@V:Im Kurztest: \1 /' ${article}
+    fi
+    if [ "${author}" ]; then
+        # add author
+        sed -i 's/\@A: *.*$/\@A:Uwe Vollbracht/g' ${article}
+    fi
+    # remove wrong tagged @BA-picture
+    # DEPRECATED after
+    # https://github.com/SlurmMcKenzie/lm_post_production/commit/9a6dc7ceeff1eb55e69afc4eec8d9ac52025a55b
+    # sed -i '/@BA: *.*$/d' ${article}
+
+    # replace @KT: with @ZKT:
+    sed -i 's/@KT:/@ZKT:/g' ${article}
+fi
+}
+
+
+## Module: IMPORT STARS IN TOOLTIPPS ##
+function mod_tooltipps_stars {
+
+tooltipps_stars=$(grep -e '@T: *Tooltipps' ${article})
+tooltipps_pass=$(grep -e '<R>' ${article})
+
+if [ "${tooltipps_stars}" ] && [ ! "${tooltipps_pass}" ]; then
+
+    back=$(pwd)
+    cd ../../../../../../
+    tt_one=$(ls | grep -e '_txt')
+    tt_two=$(ls | grep -e 'tooltipp')
+	occ=0
+
+    if [[ -d ${tt_one} ]]; then
+        cd ${tt_one}
+        find_tt=$(find . -type d -name "*tooltipp*" -print)
+        cd ${find_tt}
+        forth=$(pwd)
+        count_tt=$(grep -e '@T: *Tooltipps' *.txt | cut -d ":" -f 1)
+            if [[ ${count_tt} ]]; then
+                work=$(grep -o '<R>.*<R>' ${count_tt})
+                for i in ${work}; do
+                    i_new=$(echo ${i} | sed 's/\(\/\)/\\\1/')
+					cd ${back}
+					occ=$((${occ} + 1))
+					sed -i '0,/@KE:/s/@KE:/'"${occ}"'KE:/' ${article}
+					sed -i 's/\('"${occ}"'KE.*$\)/\n\1\n'"${i_new}"'/' ${article}
+					#sed -i '/'"${i_new}"'/i \'"${occ}"'KE:' ${article}
+					cd ${forth}
+                done
+            fi
+        cd ${back}
+		sed -i 's/[0-9]KE:/@KE:/' ${article}
+    else
+        cd ${back}
+    fi
+fi
+}
+
+
+## Module: REMOVE WHITESPACES, SQUARE BRACKETS FROM URLs ##
+function mod_repair_urls {
+
+urls_space=$(grep -o "\(<U> *.*[[:space:]]*.*<U>\)" ${article} | grep "[[:space:]]")
+
+    if [ "${urls_space}" ]; then
+        sed -i 's/\(<U>.*\) \(.*<U>\)/\1\2/g' ${article}
+    fi
+
+urls_brkt=$(grep -o "\(<U> *.*<U>]\)\|\(http:/<U>\)\|\(<U> *.*]\)\|\(]<U>[[:graph:]]\)" ${article})
+	if [ "${urls_brkt}" ]; then
+		#sed -i 's/\(\/<U>\)/\/\//g; s/\(<U>]\)/<U>/g; s/\(]<U>\)/<U> /g' ${article}
+		rot=$(tput setaf 1)
+        reset=$(tput sgr0)
+        echo -e ${rot}"Mit den URLs in" ${folder} "könnte etwas nicht stimmen, bitte ansehen." ${reset}
+	fi
+}
+
+
+## Module: USE SATZFERTIG AND CHECK RESULT IN BROWSER ##
+function mod_html_check {
+
+# write sf stderr and stdout in error.log
+echo -e "## Start des error.log für:" ${folder} "##\n" >> ../${error_log}
+${bin_dir}/${satzfertig} -H ${article} ${article_html} >> ../${error_log} 2>&1 &&
+echo -e "\n## Ende des error.log für:" ${folder} "##\n" >> ../${error_log}
+
+# watch HTML File in $browser
+while true
+    do
+        read -p "Generierte HTML-Datei im Browser überprüfen? [j/n]" firefox
+        case ${firefox} in
+            j | y)
+                ${browser} --safe-mode ${article_html} 2>&1
+                break
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
+}
+
+
+## Module: ERASE EMPTY SPACES IN EDITORS ABBREVATION ##
+function mod_repair_editor_abbrevation {
+
+abbrevation=$(grep -n "\((<I>[[:space:]]*.*[[:space:]]<I>)\)" ${article} | grep "[[:space:]]")
+matches=$(grep -o "\((<I>[[:space:]]*.*[[:space:]]<I>)\)" ${article} | grep -c "[[:space:]]" | cut -d ":" -f1 | tail -n -1)
+
+    if [ "${abbrevation}" ]; then
+        if [ "${matches}" == 1 ]; then
+            sed -i 's/\(<I>.*\) \(.*<I>\)/\1\2/g' ${article}
+        else
+            echo "Es scheint Leerzeichen beim Redakteurskürzel zu geben, bitte berichtigen."
+        fi
+    fi
+}
+
+
+## Module: REPAIR PERL VIDEO BOX ##
+function mod_repair_perl_video_box {
+
+online=$(grep -o "<U><U>.*$" ${article})
+
+    if [ "${online}" ]; then
+            sed -i 's/<U><U>.*\(http.*plus\).*<U>/<U>\1<U>/g' ${article}
+    fi
+}
+
+
+## Module: EXTRACT LISTINGS FROM ARTICLES ##
+function mod_extract_listing {
+
+avail=$(grep "@KT: *Listing 1" ${article})
+
+if [ "$avail" ]; then
+
+    if [ -d listings ]; then
+        rm -fR listings
+    fi
+
+    mkdir listings >/dev/null 2>&1
+    chmod a+rw listings
+    wait
+    ${bin_dir}/${satzfertig} -nL listings ${article} > /dev/null 2>&1
+    wait
+    cd listings
+    for i in * ; do
+        sed -i 's/\(.\{2\}\)//' ${i} &&
+        j=$(ls ${i} | cut -c 13-)
+        mv ${i} listing${j} &&
+        sleep 2
+    # TODO: Remove Inline-Text-Listings, keep only Listing Boxes
+    done
+    rm listing_* > /dev/null 2>&1
+    cd ..
+fi
+}
+
+
+## Module: UPLOAD LISTINGS TO SERVER ##
+function mod_upload_listings {
+
+if [[ -d listings ]]; then
+
+	if [[ -d /home/${skriptuser}/Linux-Magazin/Listings ]]; then
+		listing_part="/home/${skriptuser}/Linux-Magazin/Listings/"
+	else
+		listing_part=$(pwd | grep -o '.*production/')
+	fi
+
+listing_full=${listing_part}"listings/magazin/"${issue_year}"/"
+sw=$(grep -o '@SW:\( *.*\)' ${article} | cut -d':' -f2 | tr " " "_" | tr "[A-Z]" "[a-z]")
+
+    if [[ -d ${listing_full}${issue_month}"/"${sw} ]]; then
+    	cd listings
+        mv -v listing* ${listing_full}${issue_month}"/"${sw} &&
+        cd ..
+        rmdir listings
+    else
+        echo "Lege Verzeichnis für Listing an"
+        mkdir -vp ${listing_full}${issue_month}"/"${sw} &&
+        mod_upload_listings
+    fi
+fi
+}
+
+
+## Module: MOVE FINISHED ARTICLES ##
+function mod_move_finalized_folder {
+
+	if [ -d ${target_folder} ]; then
+		if [ -d ${target_folder}/${folder} ]; then
+			rm -fR ${target_folder}/${folder}
+		fi
+	    #...if so, move all folders there
+	    mv ${folder} ${target_folder} &&
+	    echo "Veschiebe" ${folder} "nach '2_checked'."
+	    echo -e "****\n"
+	else
+		mkdir ${target_folder} &&
+		mod_move_finalized_folder
+	fi
+}
+
+
+## Module: MOVE SOME FINISHED ARTICLES ##
+function mod_move_some_finalized_folder {
+
+	if [ -d ${target_folder}/${tempfolder} ]; then
+		if [ -d ${target_folder}/${tempfolder}/${folder} ]; then
+			rm -fR ${target_folder}/${tempfolder}/${folder}
+		fi
+	    #...if so, move all folders there
+	    mv ${folder} ${target_folder}/${tempfolder} &&
+	    echo "Verschiebe" ${folder} "nach '2_checked/"${tempfolder}
+	    echo -e "****\n"
+	else
+		mkdir -p ${target_folder}/${tempfolder} &&
+        mod_move_some_finalized_folder
+	fi
+}
+
+
+## Module: REPAIR XML ##
+function mod_repair_xml {
+
+article=article.xml
+
+edi=$(grep -e '<section>Editorial</section>' ${article})
+buecher=$(grep -e '<subject>Bücher</subject>' ${article})
+perlsnap=$(grep -e '<subject>Snapshot</subject>' ${article})
+delugdvd=$(grep -e '<kicker>In eigener Sache: DELUG-DVD</kicker>' ${article})
+
+	if [ "${edi}" ] ; then
+		sed -i 's/online access="free"/online access="restricted"/' ${article}
+	    echo "Beschränke Online-Zugriff auf ${folder}."
+	fi
+
+	if [ "${buecher}" ] || [ "${perlsnap}" ] || [ "${delugdvd}" ]; then
+	    sed -i 's/online\ access="restricted"/online\ access="free"/' ${article}
+	    echo "Konfiguriere freien Online-Zugriff auf ${folder}."
+	fi
+
+    if [ "${buecher}" ]; then
+	    # Remove references from Abbildungen
+        sed -i 's/(<ref type="figure" target="f.">\(Abbildung .\)<\/ref>)/\1/' ${article}
+        sed -i 's/(<ref type="figure" target="f..">\(Abbildung ..\)<\/ref>)/\1/' ${article}
+        # Remove references from Tables
+        sed -i 's/(<ref type="table" target="t.">\(Tabelle .\)<\/ref>)/\1/' ${article}
+        sed -i 's/(<ref type="table" target="t..">\(Tabelle ..\)<\/ref>)/\1/' ${article}
+	fi
+}
+
+
+## Module: RESIZE IMAGES BIGGER THAN 3 MB
+function mod_resize_img {
+
+# find big images (PNG and JPG)
+bigpics=$(find . \( -iname "*.png" -o -iname "*.jpg" \) -size +3M -print)
+number_of_resize_runs=0
+
+# scale target for a single run
+percentage_target=95
+
+# resize percentage per run
+percentage_steps=$((100-${percentage_target}))
+
+# factor that is needed to get pic under 3 MB
+resizefactor=0
+
+# big sized picture in BACKUP
+original_bigpic=0
+factor_per_image=0
+
+while [ "${bigpics}" ]; do
+
+	for single_big_pic in ${bigpics}; do
+		if [ ! -e ${single_big_pic}_BACKUP ]; then
+			cp ${single_big_pic} ${single_big_pic}_BACKUP
+		fi
+		${convert} ${single_big_pic} -resize ${percentage_target}% ${single_big_pic}
+		number_of_resize_runs=$(ls ${single_big_pic}* | grep -o "[0-9]\+$")
+		if [ ${number_of_resize_runs} ]; then
+			number_of_resize_runs=$((${number_of_resize_runs}+1))
+			rm -f ${single_big_pic}__*
+			cp ${single_big_pic} ${single_big_pic}__${number_of_resize_runs}
+            head -c ${number_of_resize_runs} < /dev/zero | tr '\0' '\56'
+		else
+			number_of_resize_runs=1
+			cp ${single_big_pic} ${single_big_pic}__${number_of_resize_runs}
+            head -c ${number_of_resize_runs} < /dev/zero | tr '\0' '\56'
+		fi
+	done
+
+	bigpics=$(find . \( -iname "*.png" -o -iname "*.jpg" \) -size +3M -print)
+
+	if [ ! "${single_big_pic}" ]; then
+		break
+	fi
+done
+
+smallpics=$(find . -regextype posix-extended -regex '.*__[0-9]+$')
+echo -e "\n"
+
+for single_smallpic in ${smallpics}; do
+	factor_per_image=$(echo ${single_smallpic} | grep -o "[0-9]\+$")
+	resizefactor=$((100-${factor_per_image}*${percentage_steps}))
+	original_bigpic=$(echo ${single_smallpic} | sed 's/__.*$/_BACKUP/g')
+	find_name_of_pic=$(echo ${single_smallpic} | sed 's/__.*$//g')
+	if [[ "${resizefactor}" -gt 0 ]]; then
+		${convert} ${original_bigpic} -resize ${resizefactor}% ${find_name_of_pic}
+		echo "Reduziere Grafik in" ${folder} "auf" ${resizefactor} "Prozent ihrer Groesse."
+	else
+		echo "Reduziere Grafik in" ${folder} "auf Maximalgroesse."
+	fi
+	rm -f ${original_bigpic} ${single_smallpic}
+done
+
+
+}
+
+
+#####   Main: "-c" - check for 'article.txt' #####
+function check {
+
+# Checks, if export from Indesign worked and there is an 'article.txt' in every folder
+
+    if [ -d ${exportpath} ]; then
+        # List folders with leading digits
+        for folder in $(ls -d ../[[:digit:]][[:digit:]][[:digit:]]*); do
+
+	     if [[ -d ${folder} ]]; then
+				# and dive into it
+                cd ${folder}
+
+				if [ -f ${article} ]; then
+					continue
+				else
+					red=$(tput setaf 1)
+					reset=$(tput sgr0)
+					echo -e "Konnte 'article.txt' nicht im finden im Ordner:" ${red}${folder}${reset}
+					missing=true
+                fi
+            fi
+        done
+        if [ ${missing} ]; then
+				red=$(tput setaf 1)
+				reset=$(tput sgr0)
+				echo -e ${red}"Ein oder mehrere 'article.txt'-Dateien muss das Layout noch einmal neu erzeugen."${reset}
+			else
+				green=$(tput setaf 2)
+				reset=$(tput sgr0)
+				echo -e ${green}"Alle 'article.txt'-Dateien scheinen da zu sein. Weiter geht es mit 'lm_post_production -r'."${reset}
+        fi
+    else
+		echo -e "Du rufst das Skript vermutlich aus dem falschen Verzeichnis heraus auf. Es startet nur, wenn man es aus einem Unterverzeichnis in '1_export' aufruft."
+		exit 0
+    fi
+}
+
+## CALLS ALL MODULES THAT REPAIR{} NEEDS FOR SINGLE ARTICLE ##
+function repair_article {
+
+echo -e "\nNächster Artikel:"${folder}
+echo -e "================================"
+
+# backup original folder with exported 'article.txt' for later corrections and debugging
+backup
+
+# check if article.txt is writeable (0754)
+checkperms
+
+# convert to UTF-8
+convert_to_utf8
+
+# this module removes "Heft-DVD" boxes that make no sense online
+mod_warnings
+mod_kaleidoskop
+mod_remove_duplicate
+mod_insecurity_pic
+mod_remove_ads
+mod_replace_bookbox
+mod_remove_ctag
+mod_prepare_ed_letter
+mod_prepare_pics_news_zut
+mod_repair_news_headline
+mod_repair_news_box
+mod_sub_headlines
+mod_prepare_edi
+mod_repair_urls
+mod_repair_editor_abbrevation
+mod_repair_perl_video_box
+mod_repair_comments
+mod_prepare_tooltipps
+mod_tooltipps_stars
+mod_remove_boxes
+
+# convert back to ISO-8859-15
+convert_to_iso8859_15
+
+mod_html_check
+
+while true
+do
+read -p "Möchtest Du etwas am Artikel (in der 'article.txt') ändern und/oder einen Blick auf das 'error.log' werfen? [j/n]" error
+	case ${error} in
+	j | y)
+		echo "Error Log:"
+		cat ${working_dir}/${error_log} | more
+		echo -e "\n"
+		echo "Starte Editor..."
+		rm ${working_dir}/${error_log}
+		sleep 2
+		${editor} ${article} > /dev/null 2>&1 &
+
+		read -p "Weiter zum nächsten Artikel? [j/n]" moveon
+		# Pass changes on TXT files to HTML files
+		${bin_dir}/${satzfertig} -Hq ${article} ${article_html} 2>&1 &&
+
+			case ${moveon} in
+			j | y)
+				break
+				;;
+			*)
+				exit 0
+				;;
+			esac
+		break
+		;;
+	*)
+		read -p "Weiter zum nächsten Artikel? [j/n]" moveover
+			case ${moveover} in
+			j | y)
+				rm ${working_dir}/${error_log}
+				break
+				;;
+			*)
+				exit 0
+				;;
+			esac
+		break
+		;;
+	esac
+done
+}
+
+
+#####   Main: "-r" - repair txt-files #####
+function repair {
+
+# Repairs all kinds of bugs before conversion and shows result
+
+# Array holds x values from [0] .. [x]
+arguments=("${@}")
+
+	# check, if location is your own subfolder in "1_export", for example "kki"
+    sleep 2
+    if [ -d ${exportpath} ]; then
+
+        # make error.log for sf if non-existing
+        if [ ! -f ${working_dir}/${error_log} ]; then
+            touch ${working_dir}/${error_log}
+            chmod u+x ${working_dir}/${error_log}
+	    wait
+        fi
+
+		if  [[ "${#}" -gt 0 ]]; then
+			## Insert modules
+			# List folders with leading digits and dive into it
+
+			for ((runs=0;runs<${#};runs++)); do
+				for folder in ${arguments[$runs]}; do
+					if [ -d ${working_dir}/${folder} ]; then
+						cd ${working_dir}/${folder}
+						repair_article
+					# go back in your subfolder, for example "kki"
+					cd ..
+					fi
+				done
+			done
+		echo -e "\nWenn alle Artikel ('article.txt') gut aussehen, könntest Du jetzt 'lm_post_production -ms <Ordner1> <Ordner2> ...' aufrufen, um die Listings zu extrahieren und die Dateien auf den XML-Export vorzubereiten.\n"
+		else
+			## Insert modules
+			# List folders with leading digits and dive into it
+			for folder in $(ls -d [[:digit:]]*); do
+				if [ -d ${working_dir}/${folder} ]; then
+					cd ${working_dir}/${folder}
+					repair_article
+					# go back in your subfolder, for example "kki"
+					cd ..
+				fi
+			done
+			echo -e "\nWenn alle Artikel ('article.txt') gut aussehen, könntest Du jetzt 'lm_post_production -m' aufrufen, um die Listings zu extrahieren und die Dateien auf den XML-Export vorzubereiten.\n"
+		fi
+    else
+	echo -e "Du rufst das Skript vermutlich aus dem falschen Verzeichnis heraus auf. Es startet nur, wenn man es aus einem Unterverzeichnis in '1_export' aufruft."
+        exit 0
+    fi
+}
+
+
+##### Main: "-m" - CONVERT LISTINGS AND MOVE FOLDERS #######
+function make_listings {
+
+
+
+arguments=("${@}")
+
+    # check, if location is your own subfolder in "1_export", for example "kki"
+    if [ -d ${exportpath} ]; then
+
+        # make error.log for sf if non-existing
+        if [ -f ${working_dir}/${error_log} ]; then
+            touch ${working_dir}/${error_log}
+            chmod a+x ${working_dir}/${error_log}
+            wait
+        fi
+		# If there is one argument/folder attached, do this
+		if  [[ "${#}" -gt 0 ]]; then
+
+			# loop through every argument/folder
+			for ((mloop=0; mloop<${#}; mloop++)); do
+				echo -e "Das Skript generiert und verschiebt die Listings, wenn es welche findet..."
+				for folder in ${arguments[$mloop]}; do
+					if [ -d ${working_dir}/${folder} ]; then
+						cd ${working_dir}/${folder}
+
+						# after everything is fine with article.txt, start extracting the listings
+						mod_extract_listing
+						mod_upload_listings
+						# go back in your subfolder, for example "kki"
+						cd ..
+
+						# check if $target_folder exists and move just finalized $folder in a subfolder
+						mod_move_some_finalized_folder
+					fi
+				done
+			done
+			echo -e "Nun kannst Du einen oder mehrere Artikel in XML-Versionen verwandeln. Dazu genügt der Aufruf von 'lm_post_production -us' ohne weitere Argumente."
+			exit 0
+		else
+				## Insert modules
+				#
+				# list folders and ls into it one by one
+				echo -e "Das Skript generiert und verschiebt die Listings, wenn es welche findet..."
+				if [[ $(ls -d * 2>/dev/null)  ]]; then
+					for folder in $(ls -d [[:digit:]]*); do
+						if [ -d ${working_dir}/${folder} ]; then
+							cd ${working_dir}/${folder}
+							# after everything is fine with article.txt, start extracting the listings
+							mod_extract_listing
+							mod_upload_listings
+
+							# go back in your subfolder, for example "kki"
+							cd ..
+
+							# check if $target_folder exists and move just finalized $folder there
+							mod_move_finalized_folder
+						fi
+					done
+				else
+					echo -e "Keine Ordner zum Verschieben gefunden."
+				fi
+				exit 0
+		fi
+    else
+        echo "Du rufst das Skript vermutlich aus dem falschen Verzeichnis heraus auf. Es startet nur, wenn man es aus einem Unterverzeichnis in '1_export' aufruft."
+        exit 0
+    fi
+}
+
+
+##### Main -u: Prepare XML files for Upload
+function upload {
+
+# CONVERT TXT TO XML AND CHANGE XML FILES
+
+arguments=("${@}")
+
+# check, if location is in "2_checked"
+if [ -d ${target_folder} ]; then
+
+	if  [[ "${#}" -gt 0 ]]; then
+
+		if [ "ls -A ${target_folder}/${tempfolder}" ]; then
+			# walk into '2_checked/temp'
+			cd ${target_folder}/${tempfolder}
+
+			# list all folders in 'temp'
+			ls -d [0-9][0-9][0-9]*
+
+			read -p "Alle aufgelisteten Artikel ins XML-Format verwandeln, reparieren und alle Bilder verkleinern? [j/n]" yesyoucan
+				case ${yesyoucan} in
+				j | y)
+					. ${bin_dir}/convert2xml.sh -y ${issue_year} -i ${issue_month} -m LM &&
+					echo "Konvertiere alle TXT-Artikel in XML-Dateien, verkleinere Bilder."
+
+					;;
+				*)
+					exit 0
+					;;
+				esac
+
+		# repair things before conversion starts
+		# list folders in '2_checked' and ls into it one by one
+			for folder in $(ls -d [0-9][0-9][0-9]*); do
+				if [ -d ${target_folder}/${tempfolder}/${folder} ]; then
+					cd ${target_folder}/${tempfolder}/${folder}
+					mod_repair_xml
+                    			mod_resize_img
+					cd ..
+					if [ -d ${target_folder}/${folder} ]; then
+						rm -fR ${target_folder}/${folder}
+					fi
+					mv ${target_folder}/${tempfolder}/${folder}/ ${target_folder}/${folder}/ &&
+					rm -fR ${folder}
+				fi
+			done
+			cd ..
+			rm -fR ${target_folder}/${tempfolder}
+			echo -e "Alle XML-Dateien repariert und bereit für den Server-Upload."
+			exit 0
+		else
+			echo -e "Finde kein Verzeichnis in '2_checked/temp'."
+			exit 0
+		fi
+	else
+		## Insert modules
+		if [ "ls -A ${target_folder}" ]; then
+			# change into '2_checked'
+			cd ${target_folder}
+
+			# show all folders an start conversion
+			ls -d [0-9][0-9][0-9]*
+
+			read -p "Alle aufgelisteten Artikel ins XML-Format verwandeln, reparieren und alle Bilder verkleinern? [j/n]" yesyoucan
+				case ${yesyoucan} in
+				j | y)
+					. ${bin_dir}/convert2xml.sh -y ${issue_year} -i ${issue_month} -m LM &&
+					echo "Konvertiere alle TXT-Artikel in XML-Dateien und verkleinere Bilder."
+					;;
+				*)
+					exit 0
+					;;
+				esac
+
+		# repair things before conversion starts
+		# list folders in '2_checked' and ls into it one by one
+			for folder in $(ls -d [0-9][0-9][0-9]*); do
+				if [ -d ${target_folder}/${folder} ]; then
+					cd ${target_folder}/${folder}
+					mod_repair_xml
+					mod_resize_img
+					cd ..
+				fi
+			done
+			echo -e "Alle XML-Dateien repariert und bereit für den Server-Upload."
+			exit 0
+		else
+			echo -e "Finde kein Verzeichnis in '2_checked'."
+		fi
+	fi
+else
+	echo "Du rufst das Skript vermutlich aus dem falschen Verzeichnis heraus auf. Es startet nur, wenn man es aus einem Unterverzeichnis in '1_export' aufruft."
+	exit 0
+fi
+}
+
+
+
+##### Start: Sort arguments ####
+function start
+{
+
+# Passes commandline arguments to different functions
+
+lock
+
+# Passed arguments
+arguments=("${@}")
+
+# Number of passed arguments:" ${#}
+# Number of chars of passed arguments:" ${#arguments}
+
+# without argument or forgetting it '-'
+if [ "${#arguments}" -eq 0 ] || [ "${#arguments}" -eq 1 ]; then
+	{
+
+		usage
+		rot=$(tput setaf 1)
+		reset=$(tput sgr0)
+		echo -e ""
+		echo -e "-----------------------------------------------"
+		echo -e ${rot}"Die verfügbaren Schalter für 'lm-post-production'."${reset}
+
+	}
+
+
+# '-r', '-c' etc.
+elif [ "${#arguments}" -eq 2 ]; then
+	{
+		if [ "${arguments[$1]}" == "-h" ] || [ "${arguments[$1]}" == "--help" ]; then
+			get_help
+
+		elif [ "${arguments[$i]}" == "-c" ] || [ "${arguments[$i]}" == "--check" ]; then
+			check
+
+		elif [ "${arguments[$i]}" == "-r" ] || [ "${arguments[$i]}" == "--repair" ]; then
+			repair
+
+		elif [ "${arguments[$i]}" == "-m" ] || [ "${arguments[$i]}" == "--make_listings" ]; then
+			make_listings
+
+		elif [ "${arguments[$i]}" == "-u" ] || [ "${arguments[$i]}" == "--upload" ]; then
+			upload
+
+		else
+			usage
+			rot=$(tput setaf 1)
+			reset=$(tput sgr0)
+			echo -e ""
+			echo -e "-----------------------------------------------"
+			echo -e ${rot}"Der Schalter ist unbekannt, bitte starte das Skript erneut..."${reset}
+		fi
+	}
+
+# switches with two chars like '-rs', '-ms' etc.
+elif [ "${#arguments}" -gt 2 ]; then
+	{
+		# prüft, ob der Schalter existiert und ob der User Ordnernamen angegeben hat
+		if [ "${arguments[$i]}" == "-rs" ] || [ "${arguments[$i]}" == "--repair_some_articles" ] && [ "${#}" -gt 1 ]; then
+			shift	# schneide erstes Argument '-rs' o.ä. ab
+			repair "${@}"
+
+		elif [ "${arguments[$i]}" == "-ms" ] || [ "${arguments[$i]}" == "--make_some_listings" ] && [ "${#}" -gt 1 ]; then
+			shift
+			make_listings "${@}"
+
+		elif [ "${arguments[$i]}" == "-us" ] || [ "${arguments[$i]}" == "--upload_some_articles" ]; then
+			#shift
+			upload "${@}"
+
+		else
+			usage
+			rot=$(tput setaf 1)
+		        reset=$(tput sgr0)
+			echo -e ""
+			echo -e "-----------------------------------------------"
+			echo -e ${rot}"Dieser Parameter erfordert ein oder mehrere Artikel-Ordnernamen als Argumente."${reset}
+		fi
+	}
+
+fi
+}
+
+#set -x
+start "${@}"

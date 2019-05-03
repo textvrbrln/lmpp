@@ -1,0 +1,145 @@
+#!/bin/bash
+
+working_dir=$(pwd)
+exportpath=${working_dir}"/../1_export"
+article=article.txt
+
+
+function get_help {
+bold=`tput bold`
+    normal=`tput sgr0`
+
+    echo -e "${bold}NAME${normal}"
+    echo -e "\tindd-exportcheck\n"
+
+    echo -e "${bold}SYNOPSIS${normal}"
+    echo -e "\tindd-exportcheck --check | --help\n"
+
+    echo -e "${bold}DESCRIPTION${normal}"
+    echo -e "\tDas Skript müsst Ihr aus dem Ordner '1_export' heraus ausrufen. Es schaut
+    \t'ob beim Export alle 'article.txt' erzeugt wurden\n"
+
+    echo -e "\tDamit das Skript seine Arbeit aufnimmt, müsst Ihr es
+    \tmit dem Parameter "-c" oder "--check" starten\n"
+
+    echo -e "${bold}OPTIONS${normal}"
+    echo -e "\t-h / --help"
+    echo -e "\t\tDiese Hilfe anzeigen.\n"
+    echo -e "\t-c / --check"
+    echo -e "\t\tPruefen, ob die 'article.txt' exportiert wurden\n"
+    echo -e "\t-l / --length"
+    echo -e "\t\tPruefen die Artikellaengen [EXPERIMENTELL!!]\n"
+
+    echo -e "${bold}AUTHOR${normal}"
+    echo -e "\tWritten by Kristian Kißling, 2015 - 2016\n"
+
+    echo -e "${bold}REPORTING BUGS${normal}"
+    echo -e "\tBug Reports to kkissling@linux-magazin.de\n"
+
+    echo -e "${bold}COPYRIGHT${normal}"
+    echo -e "\tLicense: GNU Public License v2."
+    echo -e "\tThis is free software: you are free  to  change  and  redistribute  it.
+    \tThere is NO WARRANTY, to the extent permitted by law."
+}
+
+function mod_check_length {
+
+cd ${working_dir}
+for folder in $(ls -d [[:digit:]]*); do
+            if [ -d ${working_dir}/${folder} ]; then
+				# and dive into it
+                cd ${working_dir}/${folder}
+                    blocktitel=$(grep '^@R: *U1' ${article} 2>&1 &)
+                    blockinhalt=$(grep '^@R: *Inhalt' ${article} 2>&1 &)
+                    blockmarkt=$(grep '^@SW: *Profimarkt' ${article} 2>&1 &)
+                    blockinser=$(grep '^@SW: *Inserenten' ${article} 2>&1 &)
+                    blockvorschau=$(grep '^@SW: *Vorschau [0-9]' ${article} 2>&1 &)
+
+                    check_footnote_start=$(grep '^@IT: *Infos' ${article} 2>&1 &)
+                    articleend=$(tail -5 ${article} 2>&1 | grep '<I>.*<I>' 2>&1 &)
+                    if ! [ "${check_footnote_start}" ] && ! [ "${articleend}" ] && ! [ "${blocktitel}" ] && ! [ "${blockinhalt}" ] && ! [ "${blockmarkt}" ] && ! [ "${blockinser}" ] && ! [ "${blockvorschau}" ]; then
+                        #read -p "Womöglich fehlt in "${folder}" das Ende. Autor und letzte fünf Zeilen anzeigen? [j/n]" showend
+                        echo "Womöglich fehlt in "${folder}" das Ende."
+                    fi
+            fi
+done
+}
+
+
+function check {
+    if [ -d ${exportpath} ]; then
+        # List folders with leading digits
+        for folder in $(ls -d [[:digit:]]*); do
+            if [ -d ${working_dir}/${folder} ]; then
+				# and dive into it
+                cd ${working_dir}/${folder}
+				occurence=$(grep '^@#: *ID: *[0-9]' ${article} 2>&1 &)
+
+				if [[ -f ${article} ]]; then
+					wrong_fileperms=$(stat ${article} | grep '0444' 2>&1)
+
+					if [[ "${wrong_fileperms}" ]]; then
+						echo "Die 'article.txt' in "${folder}" hat vermutlich nur Leserechte:"
+						stat ${article} | grep 'Access: ('
+		    			fi
+	
+					if [[ -n "${occurence}" ]]; then
+						continue
+					else
+						rot=$(tput setaf 1)
+						reset=$(tput sgr0)
+						echo -e "Die ID fehlt im Artikel:" ${rot}${folder}${reset}
+						missingtoo=true
+					fi
+					
+					
+				else
+					rot=$(tput setaf 1)
+					reset=$(tput sgr0)
+					echo -e "Datei 'article.txt' fehlt im Ordner:" ${rot}${folder}${reset}
+					missing=true
+                		fi
+            fi
+        done
+
+        if [ ${missing} ]; then
+				rot=$(tput setaf 1)
+				reset=$(tput sgr0)
+				echo -e ${rot}"Bitte fehlende 'article.txt' neu exportieren!"${reset}
+			else
+				green=$(tput setaf 2)
+				reset=$(tput sgr0)
+				echo -e ${green}"Alle 'article.txt'-Dateien scheinen da zu sein. Juhu!"${reset}
+        fi
+
+	if [ ${missingtoo} ]; then
+				rot=$(tput setaf 1)
+				reset=$(tput sgr0)
+				echo -e ${rot}"Bitte fehlende IDs aus dem Zope nachtragen!"${reset}
+			else
+				green=$(tput setaf 2)
+				reset=$(tput sgr0)
+				echo -e ${green}"Alle IDs scheinen vorhanden zu sein. Juhu!"${reset}
+        fi
+    else
+		echo -e "Bitte rufe das Skript aus dem Ordner ".../1_export" heraus auf!"
+		exit 0
+    fi
+}
+
+
+function start {
+
+    if [ "${1}" == "" ] || [ "${1}" == "-h" ] || [ "${1}" == "--help" ]; then
+		clear
+        get_help
+    elif [ "${1}" == "-c" ] || [ "${1}" == "--check" ]; then
+		clear
+        check
+    elif [ "${1}" == "-l" ] || [ "${1}" == "--length" ]; then
+        clear
+        mod_check_length
+    fi
+}
+
+start "${1}"
